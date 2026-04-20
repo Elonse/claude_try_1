@@ -72,14 +72,20 @@ def fetch_ftp(username: str, pattern: str) -> bytes | None:
 def fetch_shufersal(pattern: str) -> bytes | None:
     try:
         base = "https://prices.shufersal.co.il/FileObject/UpdateCategory"
+        # catID=5 is the stores category — all files on this page are store files
         resp = requests.get(base, params={"catID": "5", "page": "1"}, timeout=30)
-        links = re.findall(r'href="(/FileObject/[^"]+)"', resp.text)
-        matching = [l for l in links if pattern.lower() in l.lower()]
+        # Links look like href="/File/Get?fileId=12345" with anchor text = filename
+        pairs = re.findall(r'href="([^"]*File/Get[^"]*)"[^>]*>([^<]+)<', resp.text)
+        matching = [(href, text) for href, text in pairs if pattern.lower() in text.lower()]
         if not matching:
-            print(f"  No Shufersal file matching '{pattern}'")
+            # Fall back: take any File/Get link (catID=5 should be only store files)
+            matching = [(href, text) for href, text in pairs]
+        if not matching:
+            print(f"  No Shufersal file found (pattern='{pattern}')")
             return None
-        url = "https://prices.shufersal.co.il" + sorted(matching)[-1]
-        print(f"  Downloading {url.split('/')[-1]}...")
+        href, name = sorted(matching)[-1]
+        url = "https://prices.shufersal.co.il" + href if href.startswith("/") else href
+        print(f"  Downloading {name.strip()}...")
         r = requests.get(url, timeout=60)
         return r.content
     except Exception as e:

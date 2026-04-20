@@ -122,17 +122,19 @@ def download_ftp_prices(username: str, store_ids: set[str]) -> list[bytes]:
 
 def _shufersal_price_links(store_ids: set[str]) -> list[str]:
     base = "https://prices.shufersal.co.il/FileObject/UpdateCategory"
-    all_links: list[str] = []
+    # href="/File/Get?fileId=N", anchor text = filename (e.g. PriceFull...-001-date.gz)
+    all_pairs: list[tuple[str, str]] = []
     page = 1
     while True:
         try:
             resp = requests.get(base, params={"catID": "2", "page": str(page)}, timeout=30)
-            links = re.findall(r'href="(/FileObject/[^"]+)"', resp.text)
-            price_links = [l for l in links if "pricefull" in l.lower()]
-            if not price_links:
+            pairs = re.findall(r'href="([^"]*File/Get[^"]*)"[^>]*>([^<]+)<', resp.text)
+            price_pairs = [(h, t) for h, t in pairs if "pricefull" in t.lower()]
+            if not price_pairs:
                 break
-            all_links.extend(price_links)
-            if 'page=' not in resp.text or len(price_links) < 5:
+            all_pairs.extend(price_pairs)
+            # Check if there's a next page
+            if f"page={page + 1}" not in resp.text:
                 break
             page += 1
         except Exception as e:
@@ -140,8 +142,10 @@ def _shufersal_price_links(store_ids: set[str]) -> list[str]:
             break
 
     if store_ids:
-        all_links = [l for l in all_links if any(store_matches_filename(s, l) for s in store_ids)]
-    return list(set(all_links))
+        all_pairs = [(h, t) for h, t in all_pairs
+                     if any(store_matches_filename(s, t) for s in store_ids)]
+
+    return list({h for h, t in all_pairs})
 
 
 def download_shufersal_prices(store_ids: set[str]) -> list[bytes]:
