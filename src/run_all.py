@@ -12,11 +12,22 @@ Usage:
 """
 
 import argparse
+import json
 import sys
 from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+
+CONFIG_DIR = Path(__file__).parent.parent / "config"
+
+
+def branches_empty() -> bool:
+    path = CONFIG_DIR / "branches.json"
+    if not path.exists():
+        return True
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return all(len(v) == 0 for v in data.values())
 
 
 def parse_args():
@@ -30,10 +41,12 @@ def parse_args():
 def main():
     args = parse_args()
 
-    if args.stores_only:
+    if args.stores_only or branches_empty():
         from fetch_stores import main as fetch_stores
+        print("Fetching branch list...")
         fetch_stores()
-        return
+        if args.stores_only:
+            return
 
     run_date = date.fromisoformat(args.date) if args.date else None
 

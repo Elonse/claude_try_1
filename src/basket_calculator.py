@@ -29,14 +29,16 @@ def load_state_basket() -> list[str]:
 def load_branch_data(run_date: date) -> pd.DataFrame:
     data_dir = DATA_DIR / run_date.isoformat()
     if not data_dir.exists():
-        raise FileNotFoundError(f"No data for {run_date}. Run downloader.py first.")
+        print(f"Warning: No data directory for {run_date}.")
+        return pd.DataFrame()
 
     dfs = []
     for csv_file in data_dir.glob("*.csv"):
         dfs.append(pd.read_csv(csv_file, dtype={"barcode": str}))
 
     if not dfs:
-        raise ValueError(f"No CSV files found in data/{run_date}/")
+        print(f"Warning: No CSV files found in data/{run_date}/ — scraper may have found no matching branches.")
+        return pd.DataFrame()
 
     return pd.concat(dfs, ignore_index=True)
 

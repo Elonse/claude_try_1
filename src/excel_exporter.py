@@ -69,6 +69,9 @@ def main(run_date: date | None = None, basket_results: pd.DataFrame | None = Non
 
     print(f"Exporting Excel for {run_date}...")
     df = load_branch_data(run_date)
+    if df.empty:
+        print("No data to export.")
+        return
     export_branch_files(run_date, df)
 
     if basket_results is not None and not basket_results.empty:
