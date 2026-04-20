@@ -1,33 +1,27 @@
 """
-Download PriceFull XML files for all 4 chains.
-Reads config/branches.json to know which store IDs we care about.
-Saves processed CSVs to data/YYYY-MM-DD/.
-Raw XMLs are never kept.
+Download PriceFull XML files for all 4 chains using direct HTTP/FTP.
+Saves processed CSVs to data/YYYY-MM-DD/. Raw XMLs are never kept.
 """
 
+import ftplib
+import gzip
+import io
 import json
-import os
+import re
 import tempfile
+import xml.etree.ElementTree as ET
 from datetime import date, timedelta
 from pathlib import Path
 
-from il_supermarket_scarper import ScarpingTask
-from il_supermarket_scarper.scrappers_factory import ScraperFactory
-from il_supermarket_scarper.utils import DiskFileOutput
-from il_supermarket_scarper.utils.file_types import FileTypesFilters
+import pandas as pd
+import requests
 
 SRC_DIR = Path(__file__).parent
 CONFIG_DIR = SRC_DIR.parent / "config"
 DATA_DIR = SRC_DIR.parent / "data"
 
 CHAINS_CONFIG = json.loads((CONFIG_DIR / "chains.json").read_text(encoding="utf-8"))
-
-CHAIN_SCRAPERS = [
-    ScraperFactory.OSHER_AD,
-    ScraperFactory.RAMI_LEVY,
-    ScraperFactory.SHUFERSAL,
-    ScraperFactory.YAYNO_BITAN_AND_CARREFOUR,
-]
+FTP_HOST = "url.retail.publishedprices.co.il"
 
 
 def load_branches() -> dict:
@@ -37,26 +31,23 @@ def load_branches() -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def download_prices(tmp_dir: str):
-    task = ScarpingTask(
-        enabled_scrapers=CHAIN_SCRAPERS,
-        files_types=[FileTypesFilters.PRICE_FULL_FILE],
-        output_configuration=DiskFileOutput(tmp_dir),
-        multiprocessing=2,
-    )
-    task.start()
-
-
-def parse_price_xml(xml_path: Path) -> tuple[dict, list[dict]]:
-    """Returns (file_meta, list of product dicts)."""
-    import xml.etree.ElementTree as ET
-
+def decompress(content: bytes) -> bytes:
     try:
-        tree = ET.parse(xml_path)
-    except ET.ParseError:
-        return {}, []
+        return gzip.decompress(content)
+    except Exception:
+        return content
 
-    root = tree.getroot()
+
+def parse_price_xml(content: bytes) -> tuple[dict, list[dict]]:
+    xml_bytes = decompress(content)
+    for enc in ("utf-8", "windows-1255", "iso-8859-8"):
+        try:
+            root = ET.fromstring(xml_bytes.decode(enc).encode("utf-8"))
+            break
+        except Exception:
+            continue
+    else:
+        return {}, []
 
     meta = {
         "chain_id": (root.findtext("ChainId") or root.findtext("ChainID") or "").strip(),
@@ -70,13 +61,11 @@ def parse_price_xml(xml_path: Path) -> tuple[dict, list[dict]]:
         price = (item.findtext("ItemPrice") or "").strip()
         unit = (item.findtext("UnitOfMeasure") or "").strip()
         update_date = (item.findtext("PriceUpdateDate") or "").strip()
-        products.append({
-            "barcode": barcode,
-            "name": name,
-            "price": price,
-            "unit": unit,
-            "price_update_date": update_date,
-        })
+        if barcode:
+            products.append({
+                "barcode": barcode, "name": name, "price": price,
+                "unit": unit, "price_update_date": update_date,
+            })
 
     return meta, products
 
@@ -88,47 +77,156 @@ def find_chain_key(chain_id: str) -> str | None:
     return None
 
 
-def process_and_save(tmp_dir: str, run_date: date, branches: dict):
-    import pandas as pd
+def store_matches_filename(store_id: str, filename: str) -> bool:
+    name = Path(filename).name
+    sid = store_id.lstrip("0") or "0"
+    return (
+        f"-{store_id}-" in name
+        or f"-{store_id}." in name
+        or f"-{sid}-" in name
+        or f"-{sid}." in name
+        or f"-{store_id.zfill(3)}-" in name
+        or f"-{store_id.zfill(7)}-" in name
+    )
 
+
+# ── FTP downloader ─────────────────────────────────────────────────────────────
+
+def download_ftp_prices(username: str, store_ids: set[str]) -> list[bytes]:
+    results = []
+    try:
+        ftp = ftplib.FTP(FTP_HOST, timeout=30)
+        ftp.login(username, "")
+        files = sorted(ftp.nlst())
+        price_files = [f for f in files if "pricefull" in f.lower()]
+
+        if store_ids:
+            price_files = [f for f in price_files if any(store_matches_filename(s, f) for s in store_ids)]
+
+        for filename in price_files:
+            try:
+                buf = io.BytesIO()
+                ftp.retrbinary(f"RETR {filename}", buf.write)
+                results.append(buf.getvalue())
+                print(f"  Downloaded {filename}")
+            except Exception as e:
+                print(f"  Failed {filename}: {e}")
+
+        ftp.quit()
+    except Exception as e:
+        print(f"  FTP error ({username}): {e}")
+    return results
+
+
+# ── Shufersal HTTP downloader ──────────────────────────────────────────────────
+
+def _shufersal_price_links(store_ids: set[str]) -> list[str]:
+    base = "https://prices.shufersal.co.il/FileObject/UpdateCategory"
+    all_links: list[str] = []
+    page = 1
+    while True:
+        try:
+            resp = requests.get(base, params={"catID": "2", "page": str(page)}, timeout=30)
+            links = re.findall(r'href="(/FileObject/[^"]+)"', resp.text)
+            price_links = [l for l in links if "pricefull" in l.lower()]
+            if not price_links:
+                break
+            all_links.extend(price_links)
+            if 'page=' not in resp.text or len(price_links) < 5:
+                break
+            page += 1
+        except Exception as e:
+            print(f"  Shufersal page {page} error: {e}")
+            break
+
+    if store_ids:
+        all_links = [l for l in all_links if any(store_matches_filename(s, l) for s in store_ids)]
+    return list(set(all_links))
+
+
+def download_shufersal_prices(store_ids: set[str]) -> list[bytes]:
+    results = []
+    links = _shufersal_price_links(store_ids)
+    for link in links:
+        try:
+            url = "https://prices.shufersal.co.il" + link
+            r = requests.get(url, timeout=60)
+            results.append(r.content)
+            print(f"  Downloaded {link.split('/')[-1]}")
+        except Exception as e:
+            print(f"  Failed {link}: {e}")
+    return results
+
+
+# ── Carrefour HTTP downloader ──────────────────────────────────────────────────
+
+def download_carrefour_prices(store_ids: set[str]) -> list[bytes]:
+    results = []
+    try:
+        resp = requests.get("https://prices.carrefour.co.il/", timeout=30)
+        path_m = re.search(r"const path = ['\"]([^'\"]+)['\"]", resp.text)
+        files_m = re.search(r"const files = (\[.*?\]);", resp.text, re.DOTALL)
+        if not path_m or not files_m:
+            print("  Could not parse Carrefour file list")
+            return results
+        base_path = path_m.group(1)
+        files = json.loads(files_m.group(1))
+        price_files = [f["name"] for f in files if "pricefull" in f["name"].lower()]
+        if store_ids:
+            price_files = [f for f in price_files if any(store_matches_filename(s, f) for s in store_ids)]
+        for name in price_files:
+            try:
+                url = f"https://prices.carrefour.co.il/{base_path}/{name}"
+                r = requests.get(url, timeout=60)
+                results.append(r.content)
+                print(f"  Downloaded {name}")
+            except Exception as e:
+                print(f"  Failed {name}: {e}")
+    except Exception as e:
+        print(f"  Carrefour error: {e}")
+    return results
+
+
+# ── Processing ─────────────────────────────────────────────────────────────────
+
+def process_and_save(all_contents: list[tuple[str, bytes]], run_date: date, branches: dict):
     out_dir = DATA_DIR / run_date.isoformat()
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    branch_store_ids = {}
-    for chain_key, store_list in branches.items():
-        branch_store_ids[chain_key] = {s["store_id"] for s in store_list}
+    branch_store_ids: dict[str, set[str]] = {
+        k: {s["store_id"] for s in v} for k, v in branches.items()
+    }
+    branch_map: dict[tuple[str, str], dict] = {
+        (k, s["store_id"]): s for k, v in branches.items() for s in v
+    }
 
-    for xml_file in Path(tmp_dir).rglob("*.xml"):
-        meta, products = parse_price_xml(xml_file)
+    saved = 0
+    for chain_key, content in all_contents:
+        meta, products = parse_price_xml(content)
         if not products:
-            continue
-
-        chain_key = find_chain_key(meta.get("chain_id", ""))
-        if not chain_key:
             continue
 
         store_id = meta.get("store_id", "")
         if store_id not in branch_store_ids.get(chain_key, set()):
             continue
 
-        branch_info = next(
-            (s for s in branches[chain_key] if s["store_id"] == store_id), {}
-        )
-        city = branch_info.get("city", "")
-        store_name = branch_info.get("store_name", store_id)
+        info = branch_map.get((chain_key, store_id), {})
         chain_display = CHAINS_CONFIG["chains"][chain_key]["display_name"]
 
         df = pd.DataFrame(products)
         df["chain"] = chain_display
         df["chain_key"] = chain_key
         df["store_id"] = store_id
-        df["store_name"] = store_name
-        df["city"] = city
+        df["store_name"] = info.get("store_name", store_id)
+        df["city"] = info.get("city", "")
         df["date"] = run_date.isoformat()
 
-        safe_name = f"{chain_key}_{store_id}_{city}.csv".replace(" ", "_")
+        safe_name = f"{chain_key}_{store_id}_{info.get('city','')}.csv".replace(" ", "_")
         df.to_csv(out_dir / safe_name, index=False, encoding="utf-8-sig")
         print(f"  Saved {len(products)} products: {safe_name}")
+        saved += 1
+
+    return saved
 
 
 def main(run_date: date | None = None):
@@ -138,12 +236,31 @@ def main(run_date: date | None = None):
     branches = load_branches()
     print(f"Downloading prices for {run_date}...")
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        download_prices(tmp_dir)
-        print("Processing...")
-        process_and_save(tmp_dir, run_date, branches)
+    chain_contents: list[tuple[str, bytes]] = []
 
-    print(f"Done. Data saved to data/{run_date}/")
+    for chain_key, store_list in branches.items():
+        if not store_list:
+            print(f"\n[{chain_key}] No branches — skipping")
+            continue
+        store_ids = {s["store_id"] for s in store_list}
+        print(f"\n[{chain_key}] {len(store_ids)} branches")
+
+        if chain_key == "OSHER_AD":
+            contents = download_ftp_prices("osherad", store_ids)
+        elif chain_key == "RAMI_LEVY":
+            contents = download_ftp_prices("RamiLevi", store_ids)
+        elif chain_key == "SHUFERSAL":
+            contents = download_shufersal_prices(store_ids)
+        elif chain_key == "YAYNO_BITAN_AND_CARREFOUR":
+            contents = download_carrefour_prices(store_ids)
+        else:
+            contents = []
+
+        chain_contents.extend((chain_key, c) for c in contents)
+
+    print("\nProcessing...")
+    saved = process_and_save(chain_contents, run_date, branches)
+    print(f"Done. Saved {saved} branch files to data/{run_date}/")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,4 @@
-il-supermarket-scraper
-il-supermarket-parser
+requests
 pandas
 openpyxl
 lxml

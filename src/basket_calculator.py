@@ -44,7 +44,7 @@ def load_branch_data(run_date: date) -> pd.DataFrame:
 
 
 def calculate_state_basket(df: pd.DataFrame, barcodes: list[str]) -> pd.DataFrame:
-    if not barcodes:
+    if not barcodes or df.empty or "barcode" not in df.columns:
         return pd.DataFrame()
 
     basket_df = df[df["barcode"].isin(barcodes)].copy()
