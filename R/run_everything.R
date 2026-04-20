@@ -12,7 +12,11 @@
 GITHUB_USER <- "Elonse"
 REPO_NAME   <- "claude_try_1"
 REPO_URL    <- paste0("https://github.com/", GITHUB_USER, "/", REPO_NAME, ".git")
-REPO_DIR    <- file.path(path.expand("~"), "Desktop", REPO_NAME)
+REPO_DIR    <- if (.Platform$OS.type == "windows") {
+  file.path(Sys.getenv("USERPROFILE"), "Desktop", REPO_NAME)
+} else {
+  file.path(path.expand("~"), "Desktop", REPO_NAME)
+}
 RUN_DATE    <- format(Sys.Date() - 1, "%Y-%m-%d")   # אתמול
 
 # ── 1. חבילות ─────────────────────────────────────────────────
