@@ -26,6 +26,7 @@ jobs:
 
       - name: Test connectivity to price servers
         id: connectivity
+        continue-on-error: true
         run: |
           echo "Testing Shufersal..."
           curl -s --max-time 10 -o /dev/null -w "%{http_code}" \

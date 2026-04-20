@@ -17,7 +17,13 @@ DATA_DIR = SRC_DIR.parent / "data"
 def load_state_basket() -> list[str]:
     path = CONFIG_DIR / "baskets" / "state_basket.json"
     data = json.loads(path.read_text(encoding="utf-8"))
-    return [str(item["barcode"]) for item in data.get("items", [])]
+    barcodes = []
+    for item in data.get("items", []):
+        if "barcodes" in item:
+            barcodes.extend(str(b) for b in item["barcodes"])
+        elif "barcode" in item:
+            barcodes.append(str(item["barcode"]))
+    return barcodes
 
 
 def load_branch_data(run_date: date) -> pd.DataFrame:
