@@ -1,0 +1,5 @@
+il-supermarket-scraper
+il-supermarket-parser
+pandas
+openpyxl
+lxml

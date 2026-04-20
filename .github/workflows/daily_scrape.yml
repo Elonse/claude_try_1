@@ -1,0 +1,55 @@
+name: Daily Price Scrape
+
+on:
+  schedule:
+    - cron: '0 4 * * 0-4'  # 06:00 Israel time (UTC+2), Sun-Thu
+  workflow_dispatch:         # Manual trigger from GitHub UI
+
+permissions:
+  contents: write
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Test connectivity to price servers
+        id: connectivity
+        run: |
+          echo "Testing Shufersal..."
+          curl -s --max-time 10 -o /dev/null -w "%{http_code}" \
+            "https://prices.shufersal.co.il/" > shufersal_status.txt
+          echo "Shufersal HTTP status: $(cat shufersal_status.txt)"
+
+          echo "Testing Carrefour..."
+          curl -s --max-time 10 -o /dev/null -w "%{http_code}" \
+            "https://prices.carrefour.co.il/" > carrefour_status.txt
+          echo "Carrefour HTTP status: $(cat carrefour_status.txt)"
+
+          echo "Testing Rami Levy FTP..."
+          timeout 15 curl -s --ftp-pasv \
+            "ftp://url.retail.publishedprices.co.il/" \
+            --user "RamiLevi:" -l 2>&1 | head -5 || echo "FTP timeout/blocked"
+
+      - name: Run scraper
+        run: python src/run_all.py
+        continue-on-error: true
+
+      - name: Commit and push results
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/ outputs/ config/branches.json 2>/dev/null || true
+          git diff --staged --quiet && echo "Nothing to commit" || \
+            git commit -m "Price data: $(date -u +%Y-%m-%d)" && git push

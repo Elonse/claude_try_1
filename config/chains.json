@@ -1,0 +1,30 @@
+{
+  "chains": {
+    "OSHER_AD": {
+      "display_name": "אושר עד",
+      "chain_id": "7290103152017"
+    },
+    "RAMI_LEVY": {
+      "display_name": "רמי לוי",
+      "chain_id": "7290058140886"
+    },
+    "SHUFERSAL": {
+      "display_name": "שופרסל דיל",
+      "chain_id": "7290027600007",
+      "subchain_filter": "שופרסל דיל"
+    },
+    "YAYNO_BITAN_AND_CARREFOUR": {
+      "display_name": "קרפור",
+      "chain_id": "7290055700007",
+      "subchain_filter": "קרפור"
+    }
+  },
+  "target_cities": [
+    "חיפה",
+    "קריית ביאליק",
+    "בית שמש",
+    "אשקלון",
+    "באר שבע",
+    "פתח תקווה"
+  ]
+}
