@@ -82,13 +82,17 @@ CHAIN_META <- list(
 ## 3a. FTP
 
 ftp_list_files <- function(username) {
-  h   <- new_handle(username = username, password = "")
+  h <- new_handle(username = username, password = "")
+  # dirlistonly = TRUE forces NLST — returns plain filenames, not long LIST format
+  handle_setopt(h, dirlistonly = TRUE)
   res <- tryCatch(
     curl_fetch_memory(paste0("ftp://", FTP_HOST, "/"), handle = h),
     error = function(e) { message("  FTP שגיאה (", username, "): ", e$message); NULL }
   )
   if (is.null(res)) return(character(0))
-  strsplit(rawToChar(res$content), "\r?\n")[[1]]
+  lines <- strsplit(rawToChar(res$content), "\r?\n")[[1]]
+  lines <- trimws(lines)
+  lines[nchar(lines) > 0]
 }
 
 ftp_download_file <- function(username, filename, dest) {
@@ -107,12 +111,21 @@ shufersal_list_files <- function(cat_id) {
   base <- paste0("https://prices.shufersal.co.il/FileObject/UpdateCategory?catID=", cat_id)
 
   get_page <- function(p) {
-    page <- tryCatch(read_html(GET(paste0(base, "&page=", p))),
-                     error = function(e) NULL)
+    resp <- tryCatch(GET(paste0(base, "&page=", p)), error = function(e) NULL)
+    if (is.null(resp)) return(data.frame(url = character(), filename = character(),
+                                         stringsAsFactors = FALSE))
+    if (p == 1) message("  Shufersal HTTP status: ", status_code(resp))
+    page <- tryCatch(read_html(resp), error = function(e) NULL)
     if (is.null(page)) return(data.frame(url = character(), filename = character(),
                                          stringsAsFactors = FALSE))
-    nodes    <- html_nodes(page, "a[href*='File/Get']")
-    hrefs    <- html_attr(nodes, "href")
+    # נסה קודם a[href*='File/Get'], אחר כך a[href*='file']
+    nodes <- html_nodes(page, "a[href*='File/Get'], a[href*='file'], a[href*='.gz'], a[href*='.xml']")
+    if (length(nodes) == 0 && p == 1) {
+      # הדפס חלק מהHTML לאבחון
+      html_preview <- substr(as.character(page), 1, 600)
+      message("  Shufersal HTML preview: ", html_preview)
+    }
+    hrefs     <- html_attr(nodes, "href")
     filenames <- trimws(html_text(nodes))
     hrefs_full <- ifelse(grepl("^http", hrefs),
                          hrefs,
@@ -147,7 +160,7 @@ shufersal_list_files <- function(cat_id) {
 
 carrefour_list_files <- function() {
   page_text <- tryCatch(
-    content(GET("https://prices.carrefour.co.il/"), "text", encoding = "UTF-8"),
+    content(GET("https://prices.carrefour.co.il/"), as = "text", encoding = "UTF-8"),
     error = function(e) { message("  Carrefour שגיאה: ", e$message); NULL }
   )
   if (is.null(page_text)) return(data.frame(url = character(), filename = character(),
