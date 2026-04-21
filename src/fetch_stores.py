@@ -72,20 +72,25 @@ def fetch_ftp(username: str, pattern: str) -> bytes | None:
 def fetch_shufersal(pattern: str) -> bytes | None:
     try:
         base = "https://prices.shufersal.co.il/FileObject/UpdateCategory"
-        # catID=5 is the stores category — all files on this page are store files
         resp = requests.get(base, params={"catID": "5", "page": "1"}, timeout=30)
-        # Links look like href="/File/Get?fileId=12345" with anchor text = filename
-        pairs = re.findall(r'href="([^"]*File/Get[^"]*)"[^>]*>([^<]+)<', resp.text)
-        matching = [(href, text) for href, text in pairs if pattern.lower() in text.lower()]
-        if not matching:
-            # Fall back: take any File/Get link (catID=5 should be only store files)
-            matching = [(href, text) for href, text in pairs]
-        if not matching:
+        print(f"  Shufersal HTTP status: {resp.status_code}")
+        # Debug: show first 800 chars of response to understand page structure
+        preview = resp.text[:800].replace('\n', ' ').replace('\r', '')
+        print(f"  Page preview: {preview}")
+        # Try multiple link patterns
+        links_fileget = re.findall(r'href="([^"]*File[^"]*)"', resp.text, re.IGNORECASE)
+        print(f"  File links found: {links_fileget[:5]}")
+        pairs = re.findall(r'href="([^"]*)"[^>]*>([^<]{3,60})<', resp.text)
+        stores_pairs = [(h, t) for h, t in pairs if pattern.lower() in h.lower() or pattern.lower() in t.lower()]
+        print(f"  Stores pairs: {stores_pairs[:3]}")
+        if not stores_pairs and links_fileget:
+            stores_pairs = [(h, "") for h in links_fileget if pattern.lower() in h.lower()]
+        if not stores_pairs:
             print(f"  No Shufersal file found (pattern='{pattern}')")
             return None
-        href, name = sorted(matching)[-1]
+        href, name = sorted(stores_pairs)[-1]
         url = "https://prices.shufersal.co.il" + href if href.startswith("/") else href
-        print(f"  Downloading {name.strip()}...")
+        print(f"  Downloading {name.strip() or href}...")
         r = requests.get(url, timeout=60)
         return r.content
     except Exception as e:
