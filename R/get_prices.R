@@ -70,6 +70,15 @@ xml_to_prices <- function(path, chain, store_id, store_name, city) {
   )
 }
 
+# מוריד URL לקובץ זמני — עוקף בעיית שינוי שם ב-Windows
+http_fetch <- function(url) {
+  ext  <- tools::file_ext(basename(url))
+  dest <- tempfile(fileext = if (nchar(ext) > 0) paste0(".", ext) else ".tmp")
+  res  <- curl_fetch_memory(url)
+  writeBin(res$content, dest)
+  dest
+}
+
 # ── FTP ───────────────────────────────────────────────────────────────────────
 
 FTP_HOST <- "url.retail.publishedprices.co.il"
@@ -87,12 +96,14 @@ ftp_ls <- function(user) {
 }
 
 ftp_get <- function(user, fname) {
-  dest <- file.path(TMP, fname)
-  h    <- new_handle(username = user, password = "")
-  tryCatch(
-    { curl_download(paste0("ftp://", FTP_HOST, "/", fname), dest, handle = h); dest },
-    error = function(e) { message("  FTP download failed: ", e$message); NULL }
-  )
+  h <- new_handle(username = user, password = "")
+  tryCatch({
+    # curl_fetch_memory avoids Windows file-rename permission errors
+    res  <- curl_fetch_memory(paste0("ftp://", FTP_HOST, "/", fname), handle = h)
+    dest <- tempfile(fileext = paste0(".", tools::file_ext(fname)))
+    writeBin(res$content, dest)
+    dest
+  }, error = function(e) { message("  FTP download failed: ", e$message); NULL })
 }
 
 ftp_download_stores <- function(user) {
@@ -191,11 +202,10 @@ message("\n[שופרסל דיל]")
 sf_files <- shufersal_file_list("5")   # catID=5 = store files
 sf_stores <- sf_files[grepl("store", sf_files$name, ignore.case = TRUE), ]
 if (nrow(sf_stores) > 0) {
-  url  <- tail(sort(sf_stores$url), 1)
-  dest <- file.path(TMP, basename(url))
+  url <- tail(sort(sf_stores$url), 1)
   message("  מוריד: ", basename(url))
   tryCatch({
-    curl_download(url, dest)
+    dest <- http_fetch(url)
     s <- xml_to_stores(dest)
     if (!is.null(s)) {
       branches$SHUFERSAL <- s[s$city %in% TARGET_CITIES &
@@ -213,11 +223,10 @@ cf_files <- carrefour_file_list()
 if (!is.null(cf_files)) {
   cf_stores <- cf_files[grepl("store", cf_files$name, ignore.case = TRUE), ]
   if (nrow(cf_stores) > 0) {
-    url  <- tail(sort(cf_stores$url), 1)
-    dest <- file.path(TMP, cf_stores$name[nrow(cf_stores)])
+    url <- tail(sort(cf_stores$url), 1)
     message("  מוריד: ", basename(url))
     tryCatch({
-      curl_download(url, dest)
+      dest <- http_fetch(url)
       s <- xml_to_stores(dest)
       if (!is.null(s)) {
         branches$CARREFOUR <- s[s$city %in% TARGET_CITIES &
@@ -278,11 +287,9 @@ if (!is.null(branches$SHUFERSAL) && nrow(branches$SHUFERSAL) > 0) {
                         grepl(RUN_DATE, pf_files$name), ]
   pf_files <- pf_files[grepl(paste(ids, collapse = "|"), pf_files$name), ]
   for (i in seq_len(nrow(pf_files))) {
-    url  <- pf_files$url[i]
-    dest <- file.path(TMP, pf_files$name[i])
     message("  מוריד: ", pf_files$name[i])
     tryCatch({
-      curl_download(url, dest)
+      dest <- http_fetch(pf_files$url[i])
       si  <- str_extract(pf_files$name[i], paste(ids, collapse = "|"))
       row <- branches$SHUFERSAL[branches$SHUFERSAL$store_id == si, ][1, ]
       df  <- xml_to_prices(dest, "שופרסל דיל", row$store_id, row$store_name, row$city)
@@ -300,10 +307,9 @@ if (!is.null(branches$CARREFOUR) && nrow(branches$CARREFOUR) > 0) {
                      grepl(RUN_DATE, cf_all$name) &
                      grepl(paste(ids, collapse = "|"), cf_all$name), ]
   for (i in seq_len(nrow(pf_files))) {
-    dest <- file.path(TMP, pf_files$name[i])
     message("  מוריד: ", pf_files$name[i])
     tryCatch({
-      curl_download(pf_files$url[i], dest)
+      dest <- http_fetch(pf_files$url[i])
       si  <- str_extract(pf_files$name[i], paste(ids, collapse = "|"))
       row <- branches$CARREFOUR[branches$CARREFOUR$store_id == si, ][1, ]
       df  <- xml_to_prices(dest, "קרפור", row$store_id, row$store_name, row$city)
